@@ -145,7 +145,7 @@ def a():
 
             def d():
                 nonlocal x
-                reveal_type(x)  # revealed: Literal[3, 2]
+                reveal_type(x)  # revealed: Literal[3, 2, 4]
                 x = 4
                 reveal_type(x)  # revealed: Literal[4]
 
@@ -153,8 +153,7 @@ def a():
                     reveal_type(x)  # revealed: Literal[4, 3, 2]
 ```
 
-However, currently the union of types that we build is incomplete. We walk parent scopes, but not
-sibling scopes, child scopes, second-cousin-once-removed scopes, etc:
+We also include bindings from other nested scopes that can write to the same nonlocal variable:
 
 ```py
 def a():
@@ -167,8 +166,7 @@ def a():
         def d():
             nonlocal x
             x = 3
-        # TODO: This should include 2 and 3.
-        reveal_type(x)  # revealed: Literal[1]
+        reveal_type(x)  # revealed: Literal[1, 2, 3]
 ```
 
 ## Local variable bindings "look ahead" to any assignment in the current scope
@@ -385,7 +383,7 @@ def f1():
                     y = "string"  # allowed, because `f3`'s `y` is untyped
 ```
 
-## TODO: `nonlocal` affects the inferred type in the outer scope
+## `global` and `nonlocal` affect the inferred type in the outer scope
 
 Without `nonlocal`, `g` can't write to `x`, and the inferred type of `x` in `f`'s scope isn't
 affected by `g`:
@@ -398,8 +396,20 @@ def f():
     reveal_type(x)  # revealed: Literal[1]
 ```
 
-But with `nonlocal`, `g` could write to `x`, and that affects its inferred type in `f`. That's true
-regardless of whether `g` actually writes to `x`. With a write:
+But with `nonlocal`, `g` can write to `x`, and that affects its inferred type in `f`. With a write:
+
+```py
+def f():
+    x = 1
+    def g():
+        nonlocal x
+        reveal_type(x)  # revealed: Literal[1, 2]
+        x = 2
+        reveal_type(x)  # revealed: Literal[2]
+    reveal_type(x)  # revealed: Literal[1, 2]
+```
+
+Without a write, there is no nested binding to include:
 
 ```py
 def f():
@@ -407,22 +417,48 @@ def f():
     def g():
         nonlocal x
         reveal_type(x)  # revealed: Literal[1]
-        x += 1
-        reveal_type(x)  # revealed: Literal[2]
-    # TODO: should be `Unknown | Literal[1]`
     reveal_type(x)  # revealed: Literal[1]
 ```
 
-Without a write:
+The same applies to `global` bindings. Same-scope bindings still shadow older same-scope bindings,
+but they do not shadow bindings from nested functions that can write to the same variable:
 
 ```py
-def f():
-    x = 1
-    def g():
-        nonlocal x
-        reveal_type(x)  # revealed: Literal[1]
-    # TODO: should be `Unknown | Literal[1]`
-    reveal_type(x)  # revealed: Literal[1]
+x = 1
+reveal_type(x)  # revealed: Literal[1]
+
+def foo():
+    global x
+    reveal_type(x)  # revealed: Literal[1, 5, 3, 2, 4]
+
+    x = 2
+    y = 2
+    reveal_type(x)  # revealed: Literal[2]
+    reveal_type(y)  # revealed: Literal[2]
+
+    def bar():
+        global x
+        nonlocal y
+        reveal_type(x)  # revealed: Literal[1, 5, 3, 2, 4]
+        reveal_type(y)  # revealed: Literal[2, 4, 3]
+
+        x = 3
+        y = 3
+        reveal_type(x)  # revealed: Literal[3]
+        reveal_type(y)  # revealed: Literal[3]
+
+    reveal_type(x)  # revealed: Literal[2, 3]
+    reveal_type(y)  # revealed: Literal[2, 3]
+
+    x = 4
+    y = 4
+    reveal_type(x)  # revealed: Literal[4, 3]
+    reveal_type(y)  # revealed: Literal[4, 3]
+
+reveal_type(x)  # revealed: Literal[1, 3, 2, 4]
+
+x = 5
+reveal_type(x)  # revealed: Literal[5, 3, 2, 4]
 ```
 
 ## Annotating a `nonlocal` binding is a syntax error
