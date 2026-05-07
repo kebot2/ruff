@@ -1227,32 +1227,15 @@ impl<'db> Signature<'db> {
         constraints: &'c ConstraintSetBuilder<'db>,
         normalize_implicit_receiver: bool,
     ) -> ConstraintSet<'db, 'c> {
-        let relation_visitor = HasRelationToVisitor::default(constraints);
-        let disjointness_visitor = IsDisjointVisitor::default(constraints);
-        let signature_relation_visitor = SignatureRelationVisitor::default();
-        let materialization_visitor = ApplyTypeMappingVisitor::default();
-        let checker = TypeRelationChecker::implementation_compatibility(
-            constraints,
-            &relation_visitor,
-            &disjointness_visitor,
-            &signature_relation_visitor,
-            &materialization_visitor,
-        );
-        let (self_signature, other_signature);
-        let (self_, other) = if normalize_implicit_receiver {
-            self_signature = self.clone().with_first_parameter_type(Type::unknown());
-            other_signature = other.clone().with_first_parameter_type(Type::unknown());
-            (&self_signature, &other_signature)
-        } else {
-            (self, other)
-        };
-        checker.check_signature_pair_with_typevars(
+        let source_inferable = self.implementation_consistency_inferable_typevars(db);
+        self.when_implementation_parameters_compatible_with_unreduced(
             db,
-            self_,
             other,
-            self_.implementation_consistency_inferable_typevars(db),
+            constraints,
+            normalize_implicit_receiver,
             InferableTypeVars::None,
         )
+        .reduce_inferable(db, constraints, source_inferable.iter(db))
     }
 
     /// Return `true` if this implementation accepts every argument shape accepted by an overload.
@@ -1265,24 +1248,24 @@ impl<'db> Signature<'db> {
     /// def f(x: object) -> object:
     ///     return x
     /// ```
-    fn are_implementation_parameters_compatible_with(
+    pub(crate) fn is_overload_implementation_parameters_consistent_with(
         &self,
         db: &'db dyn Db,
-        other: &Self,
+        overload: &Self,
         normalize_implicit_receiver: bool,
     ) -> bool {
         let self_ = self.clone().with_return_type(Type::unknown());
         let inferable = self_.implementation_consistency_inferable_typevars(db);
 
-        other
+        overload
             .parameter_domain_variants(db, self_.parameters.is_gradual())
             .iter()
-            .all(|other| {
+            .all(|overload| {
                 let constraints = ConstraintSetBuilder::new();
                 self_
                     .when_implementation_parameters_compatible_with(
                         db,
-                        other,
+                        overload,
                         &constraints,
                         normalize_implicit_receiver,
                     )
@@ -1313,20 +1296,18 @@ impl<'db> Signature<'db> {
                 &materialization_visitor,
             )
             .with_error_context();
-            let (self_signature, overload_signature);
-            let (self_, overload) = if normalize_implicit_receiver {
-                self_signature = self_.clone().with_first_parameter_type(Type::unknown());
-                overload_signature = overload.clone().with_first_parameter_type(Type::unknown());
-                (&self_signature, &overload_signature)
-            } else {
-                (&self_, &overload)
-            };
-            let result = checker.check_signature_pair_with_typevars(
-                db,
-                self_,
-                overload,
-                self_.implementation_consistency_inferable_typevars(db),
-                InferableTypeVars::None,
+            let result = self_.with_normalized_implementation_pair(
+                &overload,
+                normalize_implicit_receiver,
+                |self_, overload| {
+                    checker.check_signature_pair_with_typevars(
+                        db,
+                        self_,
+                        overload,
+                        self_.implementation_consistency_inferable_typevars(db),
+                        InferableTypeVars::None,
+                    )
+                },
             );
             if !result.satisfied_by_all_typevars(db, &constraints, inferable) {
                 return checker.into_error_context();
@@ -1505,30 +1486,6 @@ impl<'db> Signature<'db> {
         variance
     }
 
-    /// Return `true` if this implementation signature accepts every argument shape accepted by
-    /// one overload signature.
-    ///
-    /// ```python
-    /// from typing import overload
-    ///
-    /// @overload
-    /// def f(x: int) -> int: ...
-    /// def f(x: object) -> object:
-    ///     return x
-    /// ```
-    pub(crate) fn is_overload_implementation_parameters_consistent_with(
-        &self,
-        db: &'db dyn Db,
-        overload: &Self,
-        normalize_implicit_receiver: bool,
-    ) -> bool {
-        self.are_implementation_parameters_compatible_with(
-            db,
-            overload,
-            normalize_implicit_receiver,
-        )
-    }
-
     /// Return `true` if one overload return type is assignable to this implementation return type.
     ///
     /// ```python
@@ -1616,6 +1573,7 @@ impl<'db> Signature<'db> {
                 &overload.clone().with_return_type(Type::unknown()),
                 &constraints,
                 normalize_implicit_receiver,
+                overload.paramspec_typevars(db),
             );
         let receiver_constraints = if normalize_implicit_receiver {
             self.parameters()
@@ -1717,6 +1675,7 @@ impl<'db> Signature<'db> {
         other: &Self,
         constraints: &'c ConstraintSetBuilder<'db>,
         normalize_implicit_receiver: bool,
+        target_inferable: InferableTypeVars<'db>,
     ) -> ConstraintSet<'db, 'c> {
         let relation_visitor = HasRelationToVisitor::default(constraints);
         let disjointness_visitor = IsDisjointVisitor::default(constraints);
@@ -1729,20 +1688,18 @@ impl<'db> Signature<'db> {
             &signature_relation_visitor,
             &materialization_visitor,
         );
-        let (self_signature, other_signature);
-        let (self_, other) = if normalize_implicit_receiver {
-            self_signature = self.clone().with_first_parameter_type(Type::unknown());
-            other_signature = other.clone().with_first_parameter_type(Type::unknown());
-            (&self_signature, &other_signature)
-        } else {
-            (self, other)
-        };
-        checker.check_signature_pair_with_typevars_unreduced(
-            db,
-            self_,
+        self.with_normalized_implementation_pair(
             other,
-            self_.implementation_consistency_inferable_typevars(db),
-            other.paramspec_typevars(db),
+            normalize_implicit_receiver,
+            |self_, other| {
+                checker.check_signature_pair_with_typevars_unreduced(
+                    db,
+                    self_,
+                    other,
+                    self_.implementation_consistency_inferable_typevars(db),
+                    target_inferable,
+                )
+            },
         )
     }
 
@@ -1934,6 +1891,21 @@ impl<'db> Signature<'db> {
             *first = first.clone().with_annotated_type(ty);
         }
         self
+    }
+
+    fn with_normalized_implementation_pair<R>(
+        &self,
+        other: &Self,
+        normalize_implicit_receiver: bool,
+        f: impl FnOnce(&Self, &Self) -> R,
+    ) -> R {
+        if normalize_implicit_receiver {
+            let self_ = self.clone().with_first_parameter_type(Type::unknown());
+            let other = other.clone().with_first_parameter_type(Type::unknown());
+            f(&self_, &other)
+        } else {
+            f(self, other)
+        }
     }
 
     pub(crate) fn when_constraint_set_assignable_to_signatures<'c>(
@@ -2170,10 +2142,7 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         source_overloads: &[Signature<'db>],
         target_overloads: &[Signature<'db>],
     ) -> ConstraintSet<'db, 'c> {
-        if matches!(
-            self.relation,
-            TypeRelation::ConstraintSetAssignability | TypeRelation::ImplementationCompatibility
-        ) {
+        if self.relation.is_constraint_set_assignability() {
             // TODO: Oof, maybe ParamSpec needs to live at CallableSignature, not Signature?
             let source_is_single_paramspec =
                 CallableSignature::signatures_is_single_paramspec(source_overloads);
@@ -2283,18 +2252,15 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         match (source_overloads, target_overloads) {
             ([source_signature], [target_signature]) => {
                 // Base case: both callable types contain a single signature.
-                if matches!(
-                    self.relation,
-                    TypeRelation::ConstraintSetAssignability
-                        | TypeRelation::ImplementationCompatibility
-                ) && (source_signature
-                    .parameters
-                    .as_paramspec_with_prefix()
-                    .is_some()
-                    || target_signature
+                if self.relation.is_constraint_set_assignability()
+                    && (source_signature
                         .parameters
                         .as_paramspec_with_prefix()
-                        .is_some())
+                        .is_some()
+                        || target_signature
+                            .parameters
+                            .as_paramspec_with_prefix()
+                            .is_some())
                 {
                     self.check_signature_pair_inner(db, source_signature, target_signature)
                 } else {
@@ -2674,10 +2640,7 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
             )
         };
 
-        if matches!(
-            self.relation,
-            TypeRelation::ConstraintSetAssignability | TypeRelation::ImplementationCompatibility
-        ) {
+        if self.relation.is_constraint_set_assignability() {
             let source_paramspec = source.parameters.as_paramspec_with_prefix();
             let target_paramspec = target.parameters.as_paramspec_with_prefix();
 
