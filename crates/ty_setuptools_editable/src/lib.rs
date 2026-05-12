@@ -10,16 +10,11 @@ use ruff_python_parser::parse_module;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Finder {
-    site_packages: SystemPathBuf,
     mapping: Vec<Mapping>,
     namespaces: Vec<Namespace>,
 }
 
 impl Finder {
-    pub fn site_packages(&self) -> &SystemPath {
-        &self.site_packages
-    }
-
     pub fn mapping(&self) -> &[Mapping] {
         &self.mapping
     }
@@ -88,11 +83,7 @@ pub fn finder_module_from_pth_line(line: &str) -> Option<&str> {
 }
 
 /// Parse a setuptools v70.0.0+ generated finder module without executing it.
-pub fn parse_finder(
-    system: &dyn System,
-    site_packages: &SystemPath,
-    finder_path: &SystemPath,
-) -> Option<Finder> {
+pub fn parse_finder(system: &dyn System, finder_path: &SystemPath) -> Option<Finder> {
     let contents = match system.read_to_string(finder_path) {
         Ok(contents) => contents,
         Err(error) => {
@@ -133,7 +124,6 @@ pub fn parse_finder(
     }
 
     Some(Finder {
-        site_packages: site_packages.to_path_buf(),
         mapping: mapping?,
         namespaces: namespaces?,
     })

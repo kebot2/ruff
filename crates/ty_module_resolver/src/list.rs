@@ -457,7 +457,7 @@ mod tests {
     use crate::db::{Db, tests::TestDb};
     use crate::module::Module;
     use crate::resolve::{
-        ModuleResolveMode, ModuleResolveModeIngredient, dynamic_resolution_paths,
+        ModuleResolveMode, ModuleResolveModeIngredient, dynamic_resolution_path_data,
     };
     use crate::settings::SearchPathSettings;
     use crate::strategy::FallibleStrategy;
@@ -1675,7 +1675,7 @@ not_a_directory
         let events = db.take_salsa_events();
         assert_function_query_was_not_run(
             &db,
-            dynamic_resolution_paths,
+            dynamic_resolution_path_data,
             ModuleResolveModeIngredient::new(&db, ModuleResolveMode::StubsAllowed),
             &events,
         );
